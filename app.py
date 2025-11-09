@@ -5,6 +5,7 @@ from firebase_admin import credentials,auth, firestore
 import requests
 import json
 
+
 # ---------------------------
 # Firebase initialization
 # ---------------------------
@@ -13,61 +14,52 @@ if not firebase_admin._apps:
     firebase_admin.initialize_app(cred)
 db = firestore.client()
 
+
 # ---------------------------
 # LLM Server
 OLLAMA_URL = "http://127.0.0.1:11434"  # local Ollama 
 
 def call_llm_server(payload):
     api_url = f"{OLLAMA_URL.rstrip('/')}/api/generate"
-
-    # Nếu payload chứa start/end → LLM tạo lịch trình
+      # Nếu payload chứa start/end → LLM tạo lịch trình
     if "start_datetime" in payload and "end_datetime" in payload:
-        from datetime import datetime, timedelta
-
-        start_date = datetime.strptime(payload["start_datetime"], "%d-%m-%Y")
-        end_date = datetime.strptime(payload["end_datetime"], "%d-%m-%Y")
-        delta_days = (end_date - start_date).days + 1
         full_output = ""
+        placeholder = st.empty()  # placeholder hiển thị kết quả từng dòng
 
-        with st.status("🤖 LLM đang chạy...", expanded=True):
-            for i in range(delta_days):
-                current_date = (start_date + timedelta(days=i)).strftime("%d-%m-%Y")
+        with st.status("🧭 LLM đang tạo lịch trình...", expanded=True):
+            prompt = (
+                f"Tạo lịch trình du lịch từ {payload['start_datetime']} đến {payload['end_datetime']} "
+                f"{payload['origin']} → {payload['destination']}. "
+                f"Sở thích: {', '.join(payload.get('interests', []))}, Tốc độ: {payload.get('pace')}.\n"
+                "Yêu cầu:\n"
+                "1. Mỗi ngày chỉ bắt đầu bằng 'Ngày dd-mm-yyyy'.\n"
+                "2. Ghi Sáng / Trưa / Tối, mỗi mục xuống hàng.\n"
+                "3. Ghi giờ cụ thể (ví dụ: 08:00 - 09:30), 1–2 câu mỗi hoạt động.\n"
+                "4. Không lặp lại ngày cho từng hoạt động.\n"
+            )
 
-                prompt = (
-                    f"Tạo lịch trình du lịch chi tiết ngày {current_date} tại "
-                    f"{payload['origin']} → {payload['destination']}, "
-                    f"sở thích: {', '.join(payload.get('interests', []))}, tốc độ: {payload.get('pace')}.\n\n"
-                    "Viết theo định dạng:\n\n"
-                    "Sáng (HH:MM →  HH:MM): ...\n"
-                    "Trưa (HH:MM →  HH:MM): ...\n"
-                    "Tối (HH:MM →  HH:MM): ...\n\n"
-                )
+            response = requests.post(
+                api_url,
+                json={"model": "llama3.2:1b", "prompt": prompt, "max_tokens": 2000},
+                stream=True,
+                timeout=300
+            )
 
-                response = requests.post(
-                    api_url,
-                    json={"model": "llama3.2:1b", "prompt": prompt, "max_tokens": 2000},
-                    stream=True,
-                    timeout=300
-                )
-
-                day_output = ""
-                for line in response.iter_lines():
-                    if line:
-                        try:
-                            data = json.loads(line)
-                            if "response" in data:
-                                day_output += data["response"]
-                        except:
-                            continue
-
-                full_output += f"\n{day_output.strip()}\n" if day_output else f"\n❌ Không nhận được phản hồi cho ngày {current_date}.\n"
+            for line in response.iter_lines():
+                if line:
+                    try:
+                        data = json.loads(line)
+                        if "response" in data:
+                            full_output += data["response"]
+                            placeholder.markdown(full_output)  
+                    except:
+                        continue
 
         return full_output.strip()
 
-    # Nếu payload chứa prompt → Chatbot
-    elif "prompt" in payload:
+    # Nếu là chatbot
+    if "prompt" in payload:
         prompt = payload["prompt"]
-        # with st.status("💬 Chatbot đang chạy...", expanded=True):
         response = requests.post(
             api_url,
             json={"model": "llama3.2:1b", "prompt": prompt, "max_tokens": 2000},
@@ -86,9 +78,7 @@ def call_llm_server(payload):
                     continue
         return output.strip()
 
-    else:
-        return "❌ Payload không hợp lệ."
-
+    return "❌ Payload không hợp lệ."
 
 
 # ---------------------------
@@ -114,6 +104,7 @@ header {visibility: hidden;}
 st.title("🧭 TripPlanner + Ollama")
 st.subheader("Đăng ký / Đăng nhập")
 
+
 # ---------------------------
 # Khởi tạo session_state
 # ---------------------------
@@ -125,15 +116,13 @@ if "chat_history" not in st.session_state:
     st.session_state["chat_history"] = []
 
 
-# Chuẩn hóa các item trong history để tránh KeyError
 for item in st.session_state.get("history", []):
     if "type" not in item:
-        item["type"] = "llm"  # mặc định LLM
+        item["type"] = "llm" 
     if "request" not in item:
         item["request"] = {}
     if "response" not in item:
         item["response"] = ""
-
 
 
 # ---------------------------
@@ -157,35 +146,31 @@ def load_history(user_email):
         history_list.append(data)
     return history_list[-5:]
 
-def load_history(user_email):
-    history_ref = db.collection("users").document(user_email).collection("history").order_by("timestamp")
+def load_history(user_email, limit=5):
+    history_ref = db.collection("users").document(user_email).collection("history")\
+                    .order_by("timestamp", direction=firestore.Query.DESCENDING).limit(limit)
     history_docs = history_ref.stream()
     history_list = []
     for doc in history_docs:
         data = doc.to_dict()
         data["timestamp"] = data["timestamp"].strftime("%d-%m-%Y %H:%M:%S")
         history_list.append(data)
-    return history_list[-5:]
-
+    return history_list
 
 def load_chat_history(user_email):
-    history_ref = db.collection("users").document(user_email).collection("history").order_by("timestamp")
-    docs = history_ref.stream()
-    chat_history = []
-    for doc in docs:
+    history_ref = db.collection("users").document(user_email).collection("history") \
+                    .order_by("timestamp", direction=firestore.Query.DESCENDING).limit(5)
+    history_docs = history_ref.stream()
+    
+    history_list = []
+    for doc in history_docs:
         data = doc.to_dict()
-        if data.get("type") == "chat":
-            chat_history.append({
-                "role": "user",
-                "content": data.get("request", {}).get("prompt", ""),
-                "timestamp": data.get("timestamp").strftime("%d-%m-%Y %H:%M:%S")
-            })
-            chat_history.append({
-                "role": "assistant",
-                "content": data.get("response", ""),
-                "timestamp": data.get("timestamp").strftime("%d-%m-%Y %H:%M:%S")
-            })
-    return chat_history
+        # Chuyển timestamp sang chuỗi đẹp
+        data["timestamp"] = data["timestamp"].strftime("%d-%m-%Y %H:%M:%S")
+        history_list.append(data)
+    
+    return history_list
+
 
 # ---------------------------
 # Form đăng nhập/đăng ký
@@ -225,7 +210,6 @@ with col_logout:
         st.session_state["user"] = None
         st.session_state["history"] = []
         st.success("✅ Bạn đã đăng xuất.")
-
 
 
 # ---------------------------
@@ -273,51 +257,58 @@ if mode == "llm":
             "pace": pace,
         }
 
-        # Gọi LLM tạo lịch trình
-        itinerary = call_llm_server(payload)
-        st.markdown(itinerary)
+ 
+        full_output = call_llm_server(payload)
 
+      
         st.session_state["history"].append({
             "type": "llm",
             "timestamp": datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
             "request": payload,
-            "response": itinerary
+            "response": full_output
         })
 
-# --- Chatbot ---
+        if st.session_state.get("user"):
+            db.collection("users").document(st.session_state["user"]).collection("history").add({
+                "type": "llm",
+                "timestamp": datetime.now(),
+                "request": payload,
+                "response": full_output
+            })
+
+        # 3️⃣ Hiển thị ngay trên UI
+        st.markdown("### 🧭 Lịch trình của bạn")
+        st.markdown(f"**{payload['origin']} → {payload['destination']} ({payload['start_datetime']} - {payload['end_datetime']})**")
+        st.markdown(full_output)
+
 elif mode == "chat":
     st.subheader("💬 Trò chuyện cùng TripPlanner")
-
-    chat_container = st.container()
 
     if "chat_history" not in st.session_state:
         st.session_state["chat_history"] = []
 
-    # Hiển thị lịch sử chat hiện tại trong session
+    chat_container = st.container()
+
+ 
     with chat_container:
         for item in st.session_state["chat_history"]:
-            role = item.get("role")
-            content = item.get("content")
-            with st.chat_message(role):
-                st.markdown(content)
+            with st.chat_message(item["role"]):
+                st.markdown(item["content"])
 
-
+ 
     user_message = st.chat_input("Nhập tin nhắn của bạn...")
 
     if user_message:
-    
         st.session_state["chat_history"].append({
             "role": "user",
             "content": user_message,
             "timestamp": datetime.now().strftime("%d-%m-%Y %H:%M:%S")
         })
-
         with chat_container:
             with st.chat_message("user"):
                 st.markdown(user_message)
 
-        prompt_text = "\n".join([f"{item['role']}: {item['content']}" 
-                                 for item in st.session_state["chat_history"]])
+        prompt_text = "\n".join([f"{item['role']}: {item['content']}" for item in st.session_state["chat_history"]])
         bot_reply = call_llm_server({"prompt": prompt_text})
 
         st.session_state["chat_history"].append({
@@ -329,33 +320,31 @@ elif mode == "chat":
             with st.chat_message("assistant"):
                 st.markdown(bot_reply)
 
-        if st.session_state.get("user"):
-            db.collection("users").document(st.session_state["user"]).collection("history").add({
-                "type": "chat",
-                "timestamp": datetime.now(),
-                "request": {"prompt": user_message},
-                "response": bot_reply
-            })
 
+from datetime import datetime, timedelta
 
-
-# --- Hiển thị lịch sử theo chế độ ---
+# Hiển thị lịch sử chuyến đi
 st.divider()
 if st.session_state.get("history"):
     if mode == "llm":
         st.subheader("📜 Lịch sử chuyến đi")
-        for item in reversed(st.session_state["history"]):
-            if item.get("type") != "llm":
-                continue
+        
+        sorted_history = sorted(
+            [item for item in st.session_state["history"] if item.get("type") == "llm"],
+            key=lambda x: x.get("timestamp", datetime.min),
+            reverse=True
+        )
+
+        for item in sorted_history[:5]:
             origin = item.get("request", {}).get("origin", "N/A")
             destination = item.get("request", {}).get("destination", "N/A")
-            timestamp = item.get("timestamp", "N/A")
+            timestamp = item.get("timestamp", "N/A")  # dùng trực tiếp timestamp từ history
             
             st.markdown(f"**🕒 {timestamp} | {origin} → {destination}**")
             st.json(item.get("request", {}))
             st.markdown(item.get("response", ""))
             st.write("---")
 
-  
 
+  
 
