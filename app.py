@@ -24,9 +24,8 @@ def call_llm_server(payload):
       # Nếu payload chứa start/end → LLM tạo lịch trình
     if "start_datetime" in payload and "end_datetime" in payload:
         full_output = ""
-        placeholder = st.empty()  # placeholder hiển thị kết quả từng dòng
 
-        with st.status("🧭 LLM đang tạo lịch trình...", expanded=True):
+        with st.status("🧭 LLM đang tạo lịch trình..."):
             prompt = (
                 f"Tạo lịch trình du lịch từ {payload['start_datetime']} đến {payload['end_datetime']} "
                 f"{payload['origin']} → {payload['destination']}. "
@@ -51,10 +50,9 @@ def call_llm_server(payload):
                         data = json.loads(line)
                         if "response" in data:
                             full_output += data["response"]
-                            placeholder.markdown(full_output)  
+                
                     except:
                         continue
-
         return full_output.strip()
 
     # Nếu là chatbot
@@ -78,7 +76,7 @@ def call_llm_server(payload):
                     continue
         return output.strip()
 
-    return "❌ Payload không hợp lệ."
+    return " Payload không hợp lệ."
 
 
 # ---------------------------
@@ -186,9 +184,9 @@ with col_login:
         if "error" in result:
             message = result["error"]["message"]
             if message == "EMAIL_NOT_FOUND":
-                st.error("❌ Email chưa đăng ký. Hãy đăng ký trước.")
+                st.error(" Email chưa đăng ký. Hãy đăng ký trước.")
             elif message == "INVALID_PASSWORD":
-                st.error("❌ Sai mật khẩu. Vui lòng thử lại.")
+                st.error(" Sai mật khẩu. Vui lòng thử lại.")
             else:
                 st.error(f"Lỗi đăng nhập: {message}")
         else:
@@ -201,7 +199,7 @@ with col_register:
     if st.button("📝 Đăng ký"):
         try:
             user = auth.create_user(email=email, password=password)
-            st.success("✅ Đăng ký thành công! Giờ bạn có thể đăng nhập.")
+            st.success(" Đăng ký thành công! Giờ bạn có thể đăng nhập.")
         except Exception as e:
             st.error(f"Lỗi đăng ký: {e}")
 
@@ -209,7 +207,7 @@ with col_logout:
     if st.session_state["user"] and st.button("🚪 Đăng xuất"):
         st.session_state["user"] = None
         st.session_state["history"] = []
-        st.success("✅ Bạn đã đăng xuất.")
+        st.success(" Bạn đã đăng xuất.")
 
 
 # ---------------------------
@@ -260,7 +258,6 @@ if mode == "llm":
  
         full_output = call_llm_server(payload)
 
-      
         st.session_state["history"].append({
             "type": "llm",
             "timestamp": datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
@@ -276,7 +273,6 @@ if mode == "llm":
                 "response": full_output
             })
 
-        # 3️⃣ Hiển thị ngay trên UI
         st.markdown("### 🧭 Lịch trình của bạn")
         st.markdown(f"**{payload['origin']} → {payload['destination']} ({payload['start_datetime']} - {payload['end_datetime']})**")
         st.markdown(full_output)
@@ -284,31 +280,52 @@ if mode == "llm":
 elif mode == "chat":
     st.subheader("💬 Trò chuyện cùng TripPlanner")
 
-    if "chat_history" not in st.session_state:
-        st.session_state["chat_history"] = []
-
     chat_container = st.container()
+    if st.session_state.get("user"):
+        docs = db.collection("users").document(st.session_state["user"])\
+                 .collection("history").order_by("timestamp", direction=firestore.Query.ASCENDING).stream()
+        st.session_state["chat_history"] = []
+        for doc in docs:
+            data = doc.to_dict()
+            if data.get("type") == "chat":
+                # Chia thành role và content
+                st.session_state["chat_history"].append({
+                    "role": "user",
+                    "content": data.get("request", {}).get("prompt", ""),
+                    "timestamp": data.get("timestamp").strftime("%d-%m-%Y %H:%M:%S")
+                })
+                st.session_state["chat_history"].append({
+                    "role": "assistant",
+                    "content": data.get("response", ""),
+                    "timestamp": data.get("timestamp").strftime("%d-%m-%Y %H:%M:%S")
+                })
 
- 
     with chat_container:
-        for item in st.session_state["chat_history"]:
-            with st.chat_message(item["role"]):
-                st.markdown(item["content"])
+        for item in st.session_state.get("chat_history", []):
+          
+            role = item.get("role", "user")
+            content = item.get("content", "")
+            
+            with st.chat_message(role):
+                st.markdown(content)
 
- 
+
     user_message = st.chat_input("Nhập tin nhắn của bạn...")
 
     if user_message:
+    
         st.session_state["chat_history"].append({
             "role": "user",
             "content": user_message,
             "timestamp": datetime.now().strftime("%d-%m-%Y %H:%M:%S")
         })
+
         with chat_container:
             with st.chat_message("user"):
                 st.markdown(user_message)
 
-        prompt_text = "\n".join([f"{item['role']}: {item['content']}" for item in st.session_state["chat_history"]])
+        prompt_text = "\n".join([f"{item['role']}: {item['content']}" 
+                                 for item in st.session_state["chat_history"]])
         bot_reply = call_llm_server({"prompt": prompt_text})
 
         st.session_state["chat_history"].append({
@@ -320,8 +337,14 @@ elif mode == "chat":
             with st.chat_message("assistant"):
                 st.markdown(bot_reply)
 
+        if st.session_state.get("user"):
+            db.collection("users").document(st.session_state["user"]).collection("history").add({
+                "type": "chat",
+                "timestamp": datetime.now(),
+                "request": {"prompt": user_message},
+                "response": bot_reply
+            })
 
-from datetime import datetime, timedelta
 
 # Hiển thị lịch sử chuyến đi
 st.divider()
@@ -347,4 +370,3 @@ if st.session_state.get("history"):
 
 
   
-
